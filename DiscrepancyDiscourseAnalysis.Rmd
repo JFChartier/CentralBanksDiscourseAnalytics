@@ -1,0 +1,206 @@
+---
+title: "DiscrepancyDiscourseAnalysis"
+author: "Jean-Francois Chartier"
+date: "12 février 2019"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(magrittr)
+library(Matrix)
+library(quanteda)
+library(proxy)
+library(ggplot2)
+```
+
+
+#functions
+```{r}
+#function to project query in latent semantic space
+  #'@param matrixV, a term-dim matrix m*k, of m terms previouslly modelleled with a SVD of k latent dimensions
+  #'@param sigularValues, the k singular values of the train SVD
+  #'@param newData, a new document-term matrix n*m to be projected in the latent space of k dimensions 
+predictFromTrainSvdModel<-function(matrixV, singularValues, newData)
+{
+  call <- match.call()
+  tsa <-  newData %*% matrixV %*% solve(diag((singularValues)))
+  result <- list(docs_newspace = tsa)
+  return (result)
+}
+
+#function to create a unit normed vector
+normVector <- function(x) 
+{
+  if(sum(x)==0)
+    return (x)
+  else 
+    return (x / sqrt(sum(x^2)))
+  
+}
+#function to norm many vectors
+normRowVectors<-function(m){
+  t(apply(m, MARGIN = 1, FUN = function(x) normVector(x)))
+}
+
+#function to compute the dot product between 2 vectors
+#note that when dot-product is applied to 2 unit vectors, it is the same as computing the cosine metric
+dotProduct <- function(x, y) sum(x * y)
+```
+
+
+#load data
+c'est long...
+```{r}
+myMatrix = readRDS("2Banks_sparseMatrix-2018-11-05.rds")
+    
+myData = readRDS("dataForDashboardWithoutRareWords-2018-11-05.rds")
+myData[,c(9,10,11)]=NULL    
+myReducedMatrix=readRDS("2Banks_approxReducedMatrix-2018-11-05.rds")
+latentNormedDocSpace = as.matrix(myReducedMatrix$u %*% solve(diag((myReducedMatrix$d)))) %>% normRowVectors()
+
+
+
+```
+
+
+
+#Set query
+```{r}
+queryText=quanteda::as.tokens(list(c("big_fail")))
+```
+
+
+
+#Latent Semantic Analysis
+```{r}
+
+queryVector=quanteda::dfm(queryText, tolower = FALSE)
+
+#create a dummy empty sparse matrix 
+dumSparseMatrix=Matrix::sparseMatrix(i = c(1), j = c(1))
+dumSparseMatrix=as.dfm(dumSparseMatrix)
+dumSparseMatrix@Dimnames$features=myMatrix@Dimnames$features
+
+queryVector = quanteda::dfm_select(x=queryVector, pattern = dumSparseMatrix, case_insensitive = TRUE, valuetype="glob")
+
+
+#projecting query in latent space
+myReducedQueryVector = predictFromTrainSvdModel(matrixV = (myReducedMatrix$v), singularValues = myReducedMatrix$d,  newData = as.matrix(queryVector))
+myReducedQueryVector=normVector(myReducedQueryVector$docs_newspace)
+
+
+```
+
+#calculate similarity between query vector and segment vectors
+```{r}
+latentSimilarityWithQuery=proxy::simil(x=myReducedQueryVector, y = latentNormedDocSpace, by_rows=T, method=dotProduct, convert_distances = FALSE)
+```
+
+
+
+#select segment
+```{r}
+#set sim threshold
+minimaSim=0.4
+
+n=sum(latentSimilarityWithQuery[1, ]>minimaSim)
+print(c("number of relevant documents: ", n))
+
+relevantId=latentSimilarityWithQuery[1,]>minimaSim
+myQueryData=myData[relevantId,]
+myQueryData$SimilarityWithQuery=latentSimilarityWithQuery[1,][relevantId]
+#write.csv(myQueryData, file = "myQueryData20181113.csv", fileEncoding = "UTF-8")
+```
+
+#Frequency distribution by bank
+```{r}
+boe.freq.year=myQueryData$year %>% subset(., myQueryData$bank=="BoE")%>%table(.)
+
+ecb.freq.year=myQueryData$year %>% subset(., myQueryData$bank=="ECB")%>%table(.)
+
+years=seq(from=1999, to=2018, by=1)
+freq.by.year=data.frame(year=integer(length(years)), england=integer(length(years)), europe=integer(length(years)), stringsAsFactors = F)
+
+for(i in 1: length(years)){
+  y=years[i]
+  boe.freq.year[which(names(boe.freq.year)==y)]->freq.engl
+  ecb.freq.year[which(names(ecb.freq.year)==y)]->freq.europ
+  
+  freq.by.year[i,]= c(y, freq.engl, freq.europ)
+  
+}
+library(reshape2)
+x=melt(freq.by.year, id.vars=1) %>%set_colnames(., c("year", "bank", "n.segment"))
+
+ggplot(x, aes(x = year, y = n.segment, color = bank)) +
+  theme_bw() + geom_line(size=2)+
+  ylab("Number of segments")+xlab("Years")+
+  #theme(axis.text.x = element_text(angle = 90))+
+  labs(title = "Frequency distribution of semantically relevant segments")
+```
+
+#compute similarity between relevant segments
+```{r}
+relevant.vectors=latentNormedDocSpace[relevantId,]
+
+simil.betw.bank=proxy::simil(x=relevant.vectors[myQueryData$bank=="BoE",], y = relevant.vectors[myQueryData$bank=="ECB",], by_rows=T, method=dotProduct, convert_distances = FALSE)
+
+years=seq(from=1999, to=2018, by=1)
+avg.sim.by.year=data.frame(year=integer(length(years)), avg.sim=double(length(years)), std=double(length(years)), stringsAsFactors = F)
+
+for(i in 1: length(years)){
+  year_i=years[i]
+  
+  x=myQueryData%>%subset(., bank=="BoE")%>%.$year==year_i
+  y=myQueryData%>%subset(., bank=="ECB")%>%.$year==year_i
+  
+  sub.simil.year=simil.betw.bank[x, y]
+  avg.sim.by.year$year[i]=year_i
+  avg.sim.by.year$avg.sim[i]=mean(sub.simil.year)
+  avg.sim.by.year$std[i]=sd(sub.simil.year)
+  
+}
+
+```
+
+
+#Get Specificities
+```{r}
+#select bank
+bank="ECB" #"BoE"
+
+docvars(myMatrix, "ECB")<-((myData$bank=="ECB") & relevantId)
+subDFM<-dfm_subset(myMatrix, relevantId)
+
+docvars(subDFM, "BoE")=subDFM@docvars$ECB==F
+    
+#calculer les specificites
+specificites = quanteda::textstat_keyness(x=subDFM, target=subDFM@docvars$ECB==T, measure="chi2", sort=TRUE)
+    
+#filter NA
+specificites=specificites[is.na(specificites$chi2)==F,]
+    
+```
+
+#Plot
+```{r}
+
+p=0.05
+specificites=specificites[specificites$p<p]
+
+#set number of specificities to plot 
+nSpec=30
+#set min word count. Since we used the chi2, we should keep only words above 10
+min_count=10
+quanteda::textplot_keyness(x=specificites, n=nSpec, show_legend = T, color = c("darkblue", "darkred"), labelsize=2.5, min_count=min_count, labelcolor="black", margin = 0.2)+
+  ggplot2::labs(title = "Lexical Specificities of Central Banks", x = "Chi-2", y = "Lexical specificities", color = "Central Banks")+theme(plot.margin = unit(c(1,4,1,2), "cm"))+ theme(legend.text = element_text(colour="black"))+
+  scale_color_manual(labels = c("ECB", "BoE"), values = c("darkblue", "darkred"))
+
+```
+
