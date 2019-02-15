@@ -11,12 +11,14 @@ editor_options:
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+#imports
 ```{r}
 library(magrittr)
 library(Matrix)
 library(quanteda)
 library(proxy)
 library(ggplot2)
+library(caret)
 ```
 
 
@@ -53,6 +55,17 @@ normRowVectors<-function(m){
 dotProduct <- function(x, y) sum(x * y)
 ```
 
+```{r}
+
+
+
+
+
+findThresholdFromLearner<-function(learner, thresholds=seq(from = .1, to = .9, by = .1)){
+  
+}
+```
+
 
 #load data
 c'est long...
@@ -72,7 +85,7 @@ latentNormedDocSpace = as.matrix(myReducedMatrix$u %*% solve(diag((myReducedMatr
 
 #Set query
 ```{r}
-queryText=quanteda::as.tokens(list(c("big_fail")))
+queryText=quanteda::as.tokens(list(c("big_fail", "toobigtofail")))
 ```
 
 
@@ -103,11 +116,10 @@ latentSimilarityWithQuery=proxy::simil(x=myReducedQueryVector, y = latentNormedD
 ```
 
 
-
 #select segment
 ```{r}
 #set sim threshold
-minimaSim=0.4
+minimaSim=.4
 
 n=sum(latentSimilarityWithQuery[1, ]>minimaSim)
 print(c("number of relevant documents: ", n))
@@ -117,6 +129,62 @@ myQueryData=myData[relevantId,]
 myQueryData$SimilarityWithQuery=latentSimilarityWithQuery[1,][relevantId]
 #write.csv(myQueryData, file = "myQueryData20181113.csv", fileEncoding = "UTF-8")
 ```
+
+##Evaluate threshold
+```{r}
+#library(caret)
+minimaSim=.4
+#set parameters for testing
+all.thresholds=seq(from = .1, to = .9, by = .5)
+traningRows=caret::createDataPartition(y = data.for.ml$class.of.interest, p = .66, list = F)
+trainingSet=data.for.ml[traningRows,]
+testSet=data.for.ml[-traningRows,]
+fitControl <- trainControl(method="none")
+  
+result.by.threshold=lapply(all.thresholds, FUN = function(i){
+  relevantId=latentSimilarityWithQuery[1,]>all.thresholds[i]
+  posSeg=latentNormedDocSpace[relevantId, ]%>%as.data.frame(.)
+  posSeg$class.of.interest="relevant.segment"
+  negSeg=latentNormedDocSpace[-relevantId, ]%>%as.data.frame(.)
+  negSeg$class.of.interest = "irrelevant.segment"
+  data.for.ml=rbind(posSeg, negSeg)
+  #set free unused data
+  posSeg=NULL
+  negSeg=NULL
+  
+  lda.fit=train(class.of.interest~., data = data.for.ml, method = "lda", trControl = fitControl, tuneLength=1)
+  lda.pred<-predict(lda.fit,newdata = testSet)
+
+  eval<-caret::confusionMatrix(data=lda.pred, reference=testSet$class.of.interest, mode="everything")
+  eval
+})
+saveRDS(result.by.threshold, file = "result.by.threshold.rds")
+
+
+
+relevantId=latentSimilarityWithQuery[1,]>minimaSim
+posSeg=latentNormedDocSpace[relevantId, ]%>%as.data.frame(.)
+posSeg$class.of.interest="relevant.segment"
+negSeg=latentNormedDocSpace[-relevantId, ]%>%as.data.frame(.)
+negSeg$class.of.interest = "irrelevant.segment"
+data.for.ml=rbind(posSeg, negSeg)
+
+
+data_ctrl <- trainControl(method = "cv", number = 3)
+
+#Linear discriminant analysis
+#logistic regression: glm, lda
+lda.fit=train(class.of.interest~., data = data.for.ml, method = "glm", trControl = data_ctrl, tuneLength=1)
+
+#trainAndSmote=trainingSet
+#lda.fit <- caret::train(hardAgreement~., data=trainAndSmote, method='lda')#, prior = c(0.5, 0.5))
+lda.fit <- caret::train(hardAgreement~., data=trainingSet, method='lda')
+lda.pred<-predict(lda.fit,newdata = testSet, type="raw")
+
+eval<-caret::confusionMatrix(data=lda.pred, reference=testSet$hardAgreement, mode="everything")
+eval
+```
+
 
 #Frequency distribution by bank
 ```{r}
@@ -135,6 +203,11 @@ for(i in 1: length(years)){
   freq.by.year[i,]= c(y, freq.engl, freq.europ)
   
 }
+
+```
+
+##plot frequency distribution by bank
+```{r}
 library(reshape2)
 x=melt(freq.by.year, id.vars=1) %>%set_colnames(., c("year", "bank", "n.segment"))
 
@@ -144,6 +217,7 @@ ggplot(x, aes(x = year, y = n.segment, color = bank)) +
   #theme(axis.text.x = element_text(angle = 90))+
   labs(title = "Frequency distribution of semantically relevant segments")
 ```
+
 
 #compute similarity between relevant segments
 ```{r}
@@ -167,6 +241,17 @@ for(i in 1: length(years)){
   
 }
 
+```
+
+##plot averaged similarity distribution
+```{r}
+#plot(avg.sim.by.year$avg.sim, type = "l")
+p=ggplot(avg.sim.by.year, aes(x=year, y=avg.sim))+
+  geom_line()+
+  geom_errorbar(aes(ymin=avg.sim-std, ymax=avg.sim+std), colour="black", width=.1)+
+  geom_point(size=3)
+
+p+labs(title="Evolution of discourse Discrepancy between Central Banks\n measered with the cosine metric", x="Year", y = "Averaged cosine", subtitle="error bar = standard deviation ")
 ```
 
 
