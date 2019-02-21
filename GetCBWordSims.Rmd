@@ -1,0 +1,111 @@
+---
+title: "GetCBWordSims"
+author: "Jean-Francois Chartier"
+date: "9 novembre 2018"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(magrittr)
+library(proxy)
+library(Matrix)
+```
+
+
+#declaring functions
+```{r}
+#function to project query in latent semantic space
+  #'@param matrixV, a term-dim matrix m*k, of m terms previouslly modelleled with a SVD of k latent dimensions
+  #'@param sigularValues, the k singular values of the train SVD
+  #'@param newData, a new document-term matrix n*m to be projected in the latent space of k dimensions 
+  predictFromTrainSvdModel<-function(matrixV, singularValues, newData)
+  {
+    print("call predictFromTrainSvdModel")
+    call <- match.call()
+    tsa <-  newData %*% matrixV %*% solve(diag((singularValues)))
+    result <- list(docs_newspace = tsa)
+    return (result)
+  }
+  
+  #function to create a unit normed vector
+  normVector <- function(x) 
+  {
+    if(sum(x)==0)
+      return (x)
+    else 
+      return (x / sqrt(sum(x^2)))
+    
+  }
+  #function to norm many vectors
+  normRowVectors<-function(m){
+    t(apply(m, MARGIN = 1, FUN = function(x) normVector(x)))
+  }
+  
+  #function to compute the dot product between 2 vectors
+  #note that when dot-product is applied to 2 unit vectors, it is the same as computing the cosine metric
+  dotProduct <- function(x, y) sum(x * y)
+  
+```
+
+
+
+
+#load results from LSA
+```{r}
+myReducedMatrix=readRDS("2Banks_approxReducedMatrix-2018-11-05.rds")
+
+```
+
+#Get tokens
+```{r}
+myTokens=data.table::fread(input = "tokens.csv", header = F)
+
+```
+
+```{r}
+latentNormedWordSpace = as.matrix(myReducedMatrix$v %*% solve(diag((myReducedMatrix$d)))) %>% normRowVectors()
+
+```
+
+```{r}
+#latentNormedWordSpace=as.matrix(myReducedMatrix$v)
+```
+
+
+#word similarity (super slow because row-wise)
+```{r}
+#latentWordSimilarity=proxy::simil(x=latentNormedWordSpace, by_rows=T, method=dotProduct, convert_distances = FALSE)
+```
+
+#word similarity 
+(faster with matrix cross-product, which is the equivalent of the row-wise dot-product technique)
+```{r}
+
+latentWordSimilarity_2=tcrossprod(latentNormedWordSpace, y=NULL)
+rownames(latentWordSimilarity_2)=myTokens$V1
+colnames(latentWordSimilarity_2)=myTokens$V1
+```
+
+
+
+```{r}
+saveRDS(latentWordSimilarity_2, "latentWordSimilarityMatrix.rds")
+```
+
+#find k-nearest-neighbor
+```{r}
+k=20
+word="big_fail" #"financial_crisis"  #"toobigtofail"
+
+id=which(myTokens$V1==word)
+
+View(sort(latentWordSimilarity_2[id, ], decreasing = T)[1:k], "word.simil")
+
+```
+

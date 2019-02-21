@@ -19,6 +19,7 @@ library(quanteda)
 library(proxy)
 library(ggplot2)
 library(caret)
+library(e1071)
 ```
 
 
@@ -130,10 +131,49 @@ myQueryData$SimilarityWithQuery=latentSimilarityWithQuery[1,][relevantId]
 #write.csv(myQueryData, file = "myQueryData20181113.csv", fileEncoding = "UTF-8")
 ```
 
-##Evaluate threshold
+##Evaluate one threshold
 ```{r}
 #library(caret)
+
 minimaSim=.4
+
+#prepare data
+relevantId=latentSimilarityWithQuery[1,]>minimaSim
+posSeg=latentNormedDocSpace[relevantId, ]%>%as.data.frame(.)
+posSeg$class.of.interest="relevant.segment"
+negSeg=latentNormedDocSpace[-relevantId, ]%>%as.data.frame(.)
+negSeg$class.of.interest = "irrelevant.segment"
+data.for.ml=rbind(posSeg, negSeg)
+data.for.ml$class.of.interest=data.for.ml$class.of.interest%>%as.factor(.)
+
+#split train vs test sets
+traningRows=caret::createDataPartition(y = data.for.ml$class.of.interest, p = .66, list = F)
+trainingSet=data.for.ml[traningRows,]
+testSet=data.for.ml[-traningRows,]
+
+#with svm
+svmfit = svm(class.of.interest ~ ., data = trainingSet, kernel = "linear", cost = 1, scale = FALSE)
+
+
+data_ctrl <- trainControl(method = "cv", number = 3)
+
+#Linear discriminant analysis
+#logistic regression: glm, lda
+lda.fit=train(class.of.interest~., data = data.for.ml, method = "glm", trControl = data_ctrl, tuneLength=1)
+
+#trainAndSmote=trainingSet
+#lda.fit <- caret::train(hardAgreement~., data=trainAndSmote, method='lda')#, prior = c(0.5, 0.5))
+lda.fit <- caret::train(hardAgreement~., data=trainingSet, method='lda')
+lda.pred<-predict(lda.fit,newdata = testSet, type="raw")
+
+eval<-caret::confusionMatrix(data=lda.pred, reference=testSet$hardAgreement, mode="everything")
+eval
+```
+
+
+##Evaluate threshold
+```{r}
+
 #set parameters for testing
 all.thresholds=seq(from = .1, to = .9, by = .5)
 traningRows=caret::createDataPartition(y = data.for.ml$class.of.interest, p = .66, list = F)
@@ -161,28 +201,6 @@ result.by.threshold=lapply(all.thresholds, FUN = function(i){
 saveRDS(result.by.threshold, file = "result.by.threshold.rds")
 
 
-
-relevantId=latentSimilarityWithQuery[1,]>minimaSim
-posSeg=latentNormedDocSpace[relevantId, ]%>%as.data.frame(.)
-posSeg$class.of.interest="relevant.segment"
-negSeg=latentNormedDocSpace[-relevantId, ]%>%as.data.frame(.)
-negSeg$class.of.interest = "irrelevant.segment"
-data.for.ml=rbind(posSeg, negSeg)
-
-
-data_ctrl <- trainControl(method = "cv", number = 3)
-
-#Linear discriminant analysis
-#logistic regression: glm, lda
-lda.fit=train(class.of.interest~., data = data.for.ml, method = "glm", trControl = data_ctrl, tuneLength=1)
-
-#trainAndSmote=trainingSet
-#lda.fit <- caret::train(hardAgreement~., data=trainAndSmote, method='lda')#, prior = c(0.5, 0.5))
-lda.fit <- caret::train(hardAgreement~., data=trainingSet, method='lda')
-lda.pred<-predict(lda.fit,newdata = testSet, type="raw")
-
-eval<-caret::confusionMatrix(data=lda.pred, reference=testSet$hardAgreement, mode="everything")
-eval
 ```
 
 

@@ -1,0 +1,170 @@
+---
+title: "BuildQueryVector"
+author: "Jean-Francois Chartier"
+date: "21 février 2019"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#imports
+```{r}
+library(magrittr)
+library(Matrix)
+library(quanteda)
+library(proxy)
+library(ggplot2)
+library(caret)
+library(e1071)
+```
+
+
+#functions
+```{r}
+#function to project query in latent semantic space
+  #'@param matrixV, a term-dim matrix m*k, of m terms previouslly modelleled with a SVD of k latent dimensions
+  #'@param sigularValues, the k singular values of the train SVD
+  #'@param newData, a new document-term matrix n*m to be projected in the latent space of k dimensions 
+predictFromTrainSvdModel<-function(matrixV, singularValues, newData)
+{
+  call <- match.call()
+  tsa <-  newData %*% matrixV %*% solve(diag((singularValues)))
+  result <- list(docs_newspace = tsa)
+  return (result)
+}
+
+#function to create a unit normed vector
+normVector <- function(x) 
+{
+  if(sum(x)==0)
+    return (x)
+  else 
+    return (x / sqrt(sum(x^2)))
+  
+}
+#function to norm many vectors
+normRowVectors<-function(m){
+  t(apply(m, MARGIN = 1, FUN = function(x) normVector(x)))
+}
+
+#function to compute the dot product between 2 vectors
+#note that when dot-product is applied to 2 unit vectors, it is the same as computing the cosine metric
+dotProduct <- function(x, y) sum(x * y)
+
+#'@param vectorOfRef, a unit normed vector from which we will substract another vector
+#'@param vectorToSubs, a unit normed vector that will be substracted from vectorOfRef
+substractOrthogonalComplement<- function(vectorOfRef, vectorToSubs){
+  w=dotProduct(vectorOfRef, vectorToSubs)
+  orthogonal=vectorToSubs*w
+  return (vectorOfRef-orthogonal)
+}
+```
+
+
+#load data
+c'est long...
+```{r}
+myMatrix = readRDS("2Banks_sparseMatrix-2018-11-05.rds")
+myReducedMatrix=readRDS("2Banks_approxReducedMatrix-2018-11-05.rds")
+
+```
+
+#LSA of words and doc
+```{r}
+latentNormedDocSpace = as.matrix(myReducedMatrix$u %*% solve(diag((myReducedMatrix$d)))) %>% normRowVectors()
+
+
+latentNormedWordSpace = as.matrix(myReducedMatrix$v %*% solve(diag((myReducedMatrix$d)))) %>% normRowVectors()
+
+```
+
+#Set query
+```{r}
+queryText=quanteda::as.tokens(list(c("big_fail", "toobigtofail"))) #"big_fail" "toobigtofail"
+
+```
+
+
+#LSA of query
+```{r}
+queryVector=quanteda::dfm(queryText, tolower = FALSE)
+
+#create a dummy empty sparse matrix 
+dumSparseMatrix=Matrix::sparseMatrix(i = c(1), j = c(1))
+dumSparseMatrix=as.dfm(dumSparseMatrix)
+dumSparseMatrix@Dimnames$features=myMatrix@Dimnames$features
+
+queryVector = quanteda::dfm_select(x=queryVector, pattern = dumSparseMatrix, case_insensitive = TRUE, valuetype="glob")
+
+#projecting query in latent space
+myReducedQueryVector = predictFromTrainSvdModel(matrixV = (myReducedMatrix$v), singularValues = myReducedMatrix$d,  newData = as.matrix(queryVector))
+myReducedQueryVector=normVector(myReducedQueryVector$docs_newspace)
+
+```
+
+##set vector to substract from query
+```{r}
+negQuery=c("coordination_problem", "hazard_problem")
+
+negQueryVector=quanteda::as.tokens(list(negQuery)) %>%quanteda::dfm(., tolower = FALSE)
+
+#create a dummy empty sparse matrix 
+dumSparseMatrix=Matrix::sparseMatrix(i = c(1), j = c(1))%>%as.dfm(.)
+dumSparseMatrix@Dimnames$features=myMatrix@Dimnames$features
+
+negQueryVector = quanteda::dfm_select(x=negQueryVector, pattern = dumSparseMatrix, case_insensitive = TRUE, valuetype="glob")
+
+#projecting query in latent space
+myReducedNegQueryVector = predictFromTrainSvdModel(matrixV = (myReducedMatrix$v), singularValues = myReducedMatrix$d,  newData = as.matrix(negQueryVector))
+myReducedNegQueryVector=normVector(myReducedNegQueryVector$docs_newspace)
+```
+
+##substract from query
+```{r}
+myReducedQueryVector=substractOrthogonalComplement(myReducedQueryVector, myReducedNegQueryVector)
+```
+
+#calculate similarity between query vector and word vectors
+```{r}
+latentSimilOfQueryWithWords=proxy::simil(x=myReducedQueryVector, y = latentNormedWordSpace, by_rows=T, method=dotProduct, convert_distances = FALSE)
+```
+
+#plot similar words to the query
+```{r}
+#select how many topic-related words to retrieve
+kTop=30
+#get k Top topic-related keywords with query
+mostSimilars=order(latentSimilOfQueryWithWords, decreasing = T)[1:kTop]
+
+mots=myMatrix@Dimnames$features[mostSimilars]
+sims=latentSimilOfQueryWithWords[mostSimilars]
+#prepare dataframe
+dataForWordPlot=data.frame(SemanticSimilarity = sims, Word=mots, stringsAsFactors = F)
+dataForWordPlot=dataForWordPlot[order(dataForWordPlot$SemanticSimilarity, decreasing = T),]
+
+#plot
+p <-ggplot(dataForWordPlot, aes(x=reorder (dataForWordPlot$Word,dataForWordPlot$SemanticSimilarity), dataForWordPlot$SemanticSimilarity))
+p +geom_bar(stat = "identity", color="blue", fill="blue") + ggtitle("Top-Related Keywords with Query")+ xlab("Keywords") + ylab("Score of Similarity")+theme_dark()+ coord_flip()
+```
+
+
+
+
+#calculate similarity between query vector and segment vectors
+```{r}
+latentSimilOfQueryWithDoc=proxy::simil(x=myReducedQueryVector, y = latentNormedDocSpace, by_rows=T, method=dotProduct, convert_distances = FALSE)
+```
+
+```{r}
+hist(latentSimilOfQueryWithDoc[1,])
+latentSimilOfQueryWithDoc[1,]%>%sort(., decreasing = T) %>%plot(.)
+plot(x)
+
+```
+
+
+
