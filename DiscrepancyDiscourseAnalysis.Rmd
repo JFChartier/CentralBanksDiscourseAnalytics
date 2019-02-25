@@ -56,16 +56,7 @@ normRowVectors<-function(m){
 dotProduct <- function(x, y) sum(x * y)
 ```
 
-```{r}
 
-
-
-
-
-findThresholdFromLearner<-function(learner, thresholds=seq(from = .1, to = .9, by = .1)){
-  
-}
-```
 
 
 #load data
@@ -78,131 +69,17 @@ myData[,c(9,10,11)]=NULL
 myReducedMatrix=readRDS("2Banks_approxReducedMatrix-2018-11-05.rds")
 latentNormedDocSpace = as.matrix(myReducedMatrix$u %*% solve(diag((myReducedMatrix$d)))) %>% normRowVectors()
 
+selected.segment.by.threshold=readRDS("selected.segment.by.threshold.rds")
 
 
 ```
 
-
-
-#Set query
+#select threshold
 ```{r}
-queryText=quanteda::as.tokens(list(c("big_fail", "toobigtofail")))
+j=which(colnames(selected.segment.by.threshold)==0.2)
+relevantId=selected.segment.by.threshold[,j]
+myQueryData=myData[relevantId, ]
 ```
-
-
-
-#Latent Semantic Analysis
-```{r}
-
-queryVector=quanteda::dfm(queryText, tolower = FALSE)
-
-#create a dummy empty sparse matrix 
-dumSparseMatrix=Matrix::sparseMatrix(i = c(1), j = c(1))
-dumSparseMatrix=as.dfm(dumSparseMatrix)
-dumSparseMatrix@Dimnames$features=myMatrix@Dimnames$features
-
-queryVector = quanteda::dfm_select(x=queryVector, pattern = dumSparseMatrix, case_insensitive = TRUE, valuetype="glob")
-
-
-#projecting query in latent space
-myReducedQueryVector = predictFromTrainSvdModel(matrixV = (myReducedMatrix$v), singularValues = myReducedMatrix$d,  newData = as.matrix(queryVector))
-myReducedQueryVector=normVector(myReducedQueryVector$docs_newspace)
-
-
-```
-
-#calculate similarity between query vector and segment vectors
-```{r}
-latentSimilarityWithQuery=proxy::simil(x=myReducedQueryVector, y = latentNormedDocSpace, by_rows=T, method=dotProduct, convert_distances = FALSE)
-```
-
-
-#select segment
-```{r}
-#set sim threshold
-minimaSim=.4
-
-n=sum(latentSimilarityWithQuery[1, ]>minimaSim)
-print(c("number of relevant documents: ", n))
-
-relevantId=latentSimilarityWithQuery[1,]>minimaSim
-myQueryData=myData[relevantId,]
-myQueryData$SimilarityWithQuery=latentSimilarityWithQuery[1,][relevantId]
-#write.csv(myQueryData, file = "myQueryData20181113.csv", fileEncoding = "UTF-8")
-```
-
-##Evaluate one threshold
-```{r}
-#library(caret)
-
-minimaSim=.4
-
-#prepare data
-relevantId=latentSimilarityWithQuery[1,]>minimaSim
-posSeg=latentNormedDocSpace[relevantId, ]%>%as.data.frame(.)
-posSeg$class.of.interest="relevant.segment"
-negSeg=latentNormedDocSpace[-relevantId, ]%>%as.data.frame(.)
-negSeg$class.of.interest = "irrelevant.segment"
-data.for.ml=rbind(posSeg, negSeg)
-data.for.ml$class.of.interest=data.for.ml$class.of.interest%>%as.factor(.)
-
-#split train vs test sets
-traningRows=caret::createDataPartition(y = data.for.ml$class.of.interest, p = .66, list = F)
-trainingSet=data.for.ml[traningRows,]
-testSet=data.for.ml[-traningRows,]
-
-#with svm
-svmfit = svm(class.of.interest ~ ., data = trainingSet, kernel = "linear", cost = 1, scale = FALSE)
-
-
-data_ctrl <- trainControl(method = "cv", number = 3)
-
-#Linear discriminant analysis
-#logistic regression: glm, lda
-lda.fit=train(class.of.interest~., data = data.for.ml, method = "glm", trControl = data_ctrl, tuneLength=1)
-
-#trainAndSmote=trainingSet
-#lda.fit <- caret::train(hardAgreement~., data=trainAndSmote, method='lda')#, prior = c(0.5, 0.5))
-lda.fit <- caret::train(hardAgreement~., data=trainingSet, method='lda')
-lda.pred<-predict(lda.fit,newdata = testSet, type="raw")
-
-eval<-caret::confusionMatrix(data=lda.pred, reference=testSet$hardAgreement, mode="everything")
-eval
-```
-
-
-##Evaluate threshold
-```{r}
-
-#set parameters for testing
-all.thresholds=seq(from = .1, to = .9, by = .5)
-traningRows=caret::createDataPartition(y = data.for.ml$class.of.interest, p = .66, list = F)
-trainingSet=data.for.ml[traningRows,]
-testSet=data.for.ml[-traningRows,]
-fitControl <- trainControl(method="none")
-  
-result.by.threshold=lapply(all.thresholds, FUN = function(i){
-  relevantId=latentSimilarityWithQuery[1,]>all.thresholds[i]
-  posSeg=latentNormedDocSpace[relevantId, ]%>%as.data.frame(.)
-  posSeg$class.of.interest="relevant.segment"
-  negSeg=latentNormedDocSpace[-relevantId, ]%>%as.data.frame(.)
-  negSeg$class.of.interest = "irrelevant.segment"
-  data.for.ml=rbind(posSeg, negSeg)
-  #set free unused data
-  posSeg=NULL
-  negSeg=NULL
-  
-  lda.fit=train(class.of.interest~., data = data.for.ml, method = "lda", trControl = fitControl, tuneLength=1)
-  lda.pred<-predict(lda.fit,newdata = testSet)
-
-  eval<-caret::confusionMatrix(data=lda.pred, reference=testSet$class.of.interest, mode="everything")
-  eval
-})
-saveRDS(result.by.threshold, file = "result.by.threshold.rds")
-
-
-```
-
 
 #Frequency distribution by bank
 ```{r}
@@ -211,14 +88,14 @@ boe.freq.year=myQueryData$year %>% subset(., myQueryData$bank=="BoE")%>%table(.)
 ecb.freq.year=myQueryData$year %>% subset(., myQueryData$bank=="ECB")%>%table(.)
 
 years=seq(from=1999, to=2018, by=1)
-freq.by.year=data.frame(year=integer(length(years)), england=integer(length(years)), europe=integer(length(years)), stringsAsFactors = F)
+freq.by.year=data.frame(year=years, england=rep(0,length(years)), europe=rep(0,length(years)), stringsAsFactors = F)
 
 for(i in 1: length(years)){
+  #print(i)
   y=years[i]
-  boe.freq.year[which(names(boe.freq.year)==y)]->freq.engl
-  ecb.freq.year[which(names(ecb.freq.year)==y)]->freq.europ
   
-  freq.by.year[i,]= c(y, freq.engl, freq.europ)
+  freq.by.year$england[i]=boe.freq.year[which(names(boe.freq.year)==y)] %>%ifelse(test = length(.)>0, yes = ., no = 0)
+  freq.by.year$europe[i]=ecb.freq.year[which(names(ecb.freq.year)==y)]%>%ifelse(test = length(.)>0, yes = ., no = 0)
   
 }
 
@@ -269,7 +146,30 @@ p=ggplot(avg.sim.by.year, aes(x=year, y=avg.sim))+
   geom_errorbar(aes(ymin=avg.sim-std, ymax=avg.sim+std), colour="black", width=.1)+
   geom_point(size=3)
 
-p+labs(title="Evolution of discourse Discrepancy between Central Banks\n measered with the cosine metric", x="Year", y = "Averaged cosine", subtitle="error bar = standard deviation ")
+p+labs(title="Evolution of discourse discrepancy between Central Banks\n measered with the cosine metric", x="Year", y = "Averaged cosine", subtitle="error bar = standard deviation ")
+```
+
+#compute similarity between relevant segments
+```{r}
+
+years=seq(from=1999, to=2018, by=1)
+avg.sim.by.year=data.frame(year=integer(length(years)), avg.sim=double(length(years)), std=double(length(years)), stringsAsFactors = F)
+
+for(i in 1: length(years)){
+  year_i=years[1]
+  print(year_i)
+  x=myData$bank=="BoE" & myData$year==year_i
+  y=myData$bank=="ECB" & myData$year==year_i
+  #x=myData%>%subset(., bank=="BoE")%>%.$year==year_i
+  #y=myData%>%subset(., bank=="ECB")%>%.$year==year_i
+  simil.betw.bank=proxy::simil(x=latentNormedDocSpace[x,], y = latentNormedDocSpace[y,], by_rows=T, method=dotProduct, convert_distances = FALSE)
+  
+  avg.sim.by.year$year[i]=year_i
+  avg.sim.by.year$avg.sim[i]=mean(simil.betw.bank)
+  avg.sim.by.year$std[i]=sd(simil.betw.bank)
+  
+}
+
 ```
 
 
