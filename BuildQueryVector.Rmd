@@ -68,8 +68,8 @@ substractOrthogonalComplement<- function(vectorOfRef, vectorToSubs){
 #load data
 c'est long...
 ```{r}
-myMatrix = readRDS("2Banks_sparseMatrix-2018-11-05.rds")
-myReducedMatrix=readRDS("2Banks_approxReducedMatrix-2018-11-05.rds")
+myMatrix = readRDS("2Banks_sparseMatrix-2019-02-25.rds")
+myReducedMatrix=readRDS("2Banks_approxReducedMatrix-2019-02-12.rds")
 
 ```
 
@@ -84,7 +84,7 @@ latentNormedWordSpace = as.matrix(myReducedMatrix$v %*% solve(diag((myReducedMat
 
 #Set query
 ```{r}
-queryText=quanteda::as.tokens(list(c("toobigtofail"))) #"toobigtofail", "big_fail" "hazard_problem"
+queryText=quanteda::as.tokens(list(c("toobigtofail", "big_fail"))) #"toobigtofail", "big_fail" "hazard_problem"
 
 ```
 
@@ -174,81 +174,24 @@ selected.segment.by.threshold=lapply(all.thresholds, FUN = function(t){
   latentSimilOfQueryWithDoc>t
 })%>%do.call("rbind", .)%>%t(.)%>%set_colnames(., all.thresholds)
 
+cosine=c("cosine"=latentSimilOfQueryWithDoc[1,])
+selected.segment.by.threshold=cbind(selected.segment.by.threshold, cosine)
 saveRDS(selected.segment.by.threshold, "selected.segment.by.threshold.rds")
 
 ```
 
+#4. Retrieve and save relevant segments
+```{r}
+myRawText=readRDS("2Banks_preProText-2019-02-25.rds")
+myMetaData=readRDS("2Banks_metadata-2019-02-25.rds")
+myMetaData$rawText=myRawText$rawText
+
+myQueryData=cbind(myMetaData, cosine)[cosine>0,]
+
+write.csv(myQueryData[order(myQueryData$cosine, decreasing = T),], file = paste0("myQueryData", Sys.Date(),".csv"), fileEncoding = "UTF-8")
+```
+
 #END
 
-other unfinished works 
-##Evaluate one threshold
-```{r}
-#library(caret)
-
-minimaSim=.4
-
-#prepare data
-relevantId=latentSimilarityWithQuery[1,]>minimaSim
-posSeg=latentNormedDocSpace[relevantId, ]%>%as.data.frame(.)
-posSeg$class.of.interest="relevant.segment"
-negSeg=latentNormedDocSpace[-relevantId, ]%>%as.data.frame(.)
-negSeg$class.of.interest = "irrelevant.segment"
-data.for.ml=rbind(posSeg, negSeg)
-data.for.ml$class.of.interest=data.for.ml$class.of.interest%>%as.factor(.)
-
-#split train vs test sets
-traningRows=caret::createDataPartition(y = data.for.ml$class.of.interest, p = .66, list = F)
-trainingSet=data.for.ml[traningRows,]
-testSet=data.for.ml[-traningRows,]
-
-#with svm
-svmfit = svm(class.of.interest ~ ., data = trainingSet, kernel = "linear", cost = 1, scale = FALSE)
 
 
-data_ctrl <- trainControl(method = "cv", number = 3)
-
-#Linear discriminant analysis
-#logistic regression: glm, lda
-lda.fit=train(class.of.interest~., data = data.for.ml, method = "glm", trControl = data_ctrl, tuneLength=1)
-
-#trainAndSmote=trainingSet
-#lda.fit <- caret::train(hardAgreement~., data=trainAndSmote, method='lda')#, prior = c(0.5, 0.5))
-lda.fit <- caret::train(hardAgreement~., data=trainingSet, method='lda')
-lda.pred<-predict(lda.fit,newdata = testSet, type="raw")
-
-eval<-caret::confusionMatrix(data=lda.pred, reference=testSet$hardAgreement, mode="everything")
-eval
-```
-
-
-##Evaluate threshold
-```{r}
-
-#set parameters for testing
-all.thresholds=seq(from = .1, to = .9, by = .5)
-traningRows=caret::createDataPartition(y = data.for.ml$class.of.interest, p = .66, list = F)
-trainingSet=data.for.ml[traningRows,]
-testSet=data.for.ml[-traningRows,]
-fitControl <- trainControl(method="none")
-  
-result.by.threshold=lapply(all.thresholds, FUN = function(i){
-  relevantId=latentSimilarityWithQuery[1,]>all.thresholds[i]
-  posSeg=latentNormedDocSpace[relevantId, ]%>%as.data.frame(.)
-  posSeg$class.of.interest="relevant.segment"
-  negSeg=latentNormedDocSpace[-relevantId, ]%>%as.data.frame(.)
-  negSeg$class.of.interest = "irrelevant.segment"
-  data.for.ml=rbind(posSeg, negSeg)
-  #set free unused data
-  posSeg=NULL
-  negSeg=NULL
-  
-  lda.fit=train(class.of.interest~., data = data.for.ml, method = "lda", trControl = fitControl, tuneLength=1)
-  lda.pred<-predict(lda.fit,newdata = testSet)
-
-  eval<-caret::confusionMatrix(data=lda.pred, reference=testSet$class.of.interest, mode="everything")
-  eval
-})
-saveRDS(result.by.threshold, file = "result.by.threshold.rds")
-
-
-```

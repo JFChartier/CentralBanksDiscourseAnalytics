@@ -18,8 +18,6 @@ library(Matrix)
 library(quanteda)
 library(proxy)
 library(ggplot2)
-library(caret)
-library(e1071)
 ```
 
 
@@ -57,16 +55,13 @@ dotProduct <- function(x, y) sum(x * y)
 ```
 
 
-
-
-#load data
-c'est long...
+#Load data
 ```{r}
-myMatrix = readRDS("2Banks_sparseMatrix-2018-11-05.rds")
+myMatrix = readRDS("2Banks_sparseMatrix-2019-02-25.rds")
     
 myData = readRDS("dataForDashboardWithoutRareWords-2018-11-05.rds")
 myData[,c(9,10,11)]=NULL    
-myReducedMatrix=readRDS("2Banks_approxReducedMatrix-2018-11-05.rds")
+myReducedMatrix=readRDS("2Banks_approxReducedMatrix-2019-02-12.rds")
 latentNormedDocSpace = as.matrix(myReducedMatrix$u %*% solve(diag((myReducedMatrix$d)))) %>% normRowVectors()
 
 selected.segment.by.threshold=readRDS("selected.segment.by.threshold.rds")
@@ -74,65 +69,34 @@ selected.segment.by.threshold=readRDS("selected.segment.by.threshold.rds")
 
 ```
 
-#select threshold
+#1. Baseline analysis
+
+Baseline is the discrepancy between all the text segments in the corpus, regardless of any concept.
+Discrepancy between the toobigtofail concept need to be compared to this baseline in order to know if the observed difference between banks is specific to the studied concept or if it is only a difference between corpus  
+
+##compute similarity between all segments
 ```{r}
-j=which(colnames(selected.segment.by.threshold)==0.2)
-relevantId=selected.segment.by.threshold[,j]
-myQueryData=myData[relevantId, ]
-```
-
-#Frequency distribution by bank
-```{r}
-boe.freq.year=myQueryData$year %>% subset(., myQueryData$bank=="BoE")%>%table(.)
-
-ecb.freq.year=myQueryData$year %>% subset(., myQueryData$bank=="ECB")%>%table(.)
-
-years=seq(from=1999, to=2018, by=1)
-freq.by.year=data.frame(year=years, england=rep(0,length(years)), europe=rep(0,length(years)), stringsAsFactors = F)
-
-for(i in 1: length(years)){
-  #print(i)
-  y=years[i]
-  
-  freq.by.year$england[i]=boe.freq.year[which(names(boe.freq.year)==y)] %>%ifelse(test = length(.)>0, yes = ., no = 0)
-  freq.by.year$europe[i]=ecb.freq.year[which(names(ecb.freq.year)==y)]%>%ifelse(test = length(.)>0, yes = ., no = 0)
-  
-}
-
-```
-
-##plot frequency distribution by bank
-```{r}
-library(reshape2)
-x=melt(freq.by.year, id.vars=1) %>%set_colnames(., c("year", "bank", "n.segment"))
-
-ggplot(x, aes(x = year, y = n.segment, color = bank)) +
-  theme_bw() + geom_line(size=2)+
-  ylab("Number of segments")+xlab("Years")+
-  #theme(axis.text.x = element_text(angle = 90))+
-  labs(title = "Frequency distribution of semantically relevant segments")
-```
-
-
-#compute similarity between relevant segments
-```{r}
-relevant.vectors=latentNormedDocSpace[relevantId,]
-
-simil.betw.bank=proxy::simil(x=relevant.vectors[myQueryData$bank=="BoE",], y = relevant.vectors[myQueryData$bank=="ECB",], by_rows=T, method=dotProduct, convert_distances = FALSE)
 
 years=seq(from=1999, to=2018, by=1)
 avg.sim.by.year=data.frame(year=integer(length(years)), avg.sim=double(length(years)), std=double(length(years)), stringsAsFactors = F)
 
 for(i in 1: length(years)){
   year_i=years[i]
+  print(year_i)
+  x=myData$bank=="BoE" & myData$year==year_i
+  y=myData$bank=="ECB" & myData$year==year_i
+  #x=myData%>%subset(., bank=="BoE")%>%.$year==year_i
+  #y=myData%>%subset(., bank=="ECB")%>%.$year==year_i
   
-  x=myQueryData%>%subset(., bank=="BoE")%>%.$year==year_i
-  y=myQueryData%>%subset(., bank=="ECB")%>%.$year==year_i
+  #equivalent to row-wise dot-product, but should be faster
+  simil.betw.bank=tcrossprod(latentNormedDocSpace[x,], y = latentNormedDocSpace[y,])
+
   
-  sub.simil.year=simil.betw.bank[x, y]
+  #simil.betw.bank=proxy::simil(x=latentNormedDocSpace[x,], y = latentNormedDocSpace[y,], by_rows=T, method=dotProduct, convert_distances = FALSE)
+  
   avg.sim.by.year$year[i]=year_i
-  avg.sim.by.year$avg.sim[i]=mean(sub.simil.year)
-  avg.sim.by.year$std[i]=sd(sub.simil.year)
+  avg.sim.by.year$avg.sim[i]=mean(simil.betw.bank)
+  avg.sim.by.year$std[i]=sd(simil.betw.bank)
   
 }
 
@@ -149,31 +113,106 @@ p=ggplot(avg.sim.by.year, aes(x=year, y=avg.sim))+
 p+labs(title="Evolution of discourse discrepancy between Central Banks\n measered with the cosine metric", x="Year", y = "Averaged cosine", subtitle="error bar = standard deviation ")
 ```
 
-#compute similarity between relevant segments
+#2. toobigtofail concept analysis
+Perform the analysis only on relevant segments where the studied concept is saillant 
+
+##select min threshold
+Select minimal cosine between the query and the segments
+
 ```{r}
+minThreshold=0.18
+j=which(colnames(selected.segment.by.threshold)==minThreshold)
+relevantId=selected.segment.by.threshold[,j]
+myQueryData=myData[relevantId, ]
+```
+
+##Frequency distribution by bank
+
+Retrieve the proportion of segments by bank where the studied concept is at work 
+
+```{r}
+all.boe.freq.year=myData$year %>% subset(., myQueryData$bank=="BoE")%>%table(.)
+
+all.ecb.freq.year=myData$year %>% subset(., myQueryData$bank=="ECB")%>%table(.)
+
+boe.freq.year=myQueryData$year %>% subset(., myQueryData$bank=="BoE")%>%table(.)
+
+ecb.freq.year=myQueryData$year %>% subset(., myQueryData$bank=="ECB")%>%table(.)
 
 years=seq(from=1999, to=2018, by=1)
-avg.sim.by.year=data.frame(year=integer(length(years)), avg.sim=double(length(years)), std=double(length(years)), stringsAsFactors = F)
+freq.by.year=data.frame(year=years, england=rep(0,length(years)), europe=rep(0,length(years)), stringsAsFactors = F)
 
 for(i in 1: length(years)){
-  year_i=years[1]
-  print(year_i)
-  x=myData$bank=="BoE" & myData$year==year_i
-  y=myData$bank=="ECB" & myData$year==year_i
-  #x=myData%>%subset(., bank=="BoE")%>%.$year==year_i
-  #y=myData%>%subset(., bank=="ECB")%>%.$year==year_i
-  simil.betw.bank=proxy::simil(x=latentNormedDocSpace[x,], y = latentNormedDocSpace[y,], by_rows=T, method=dotProduct, convert_distances = FALSE)
+  #print(i)
+  y=years[i]
   
-  avg.sim.by.year$year[i]=year_i
-  avg.sim.by.year$avg.sim[i]=mean(simil.betw.bank)
-  avg.sim.by.year$std[i]=sd(simil.betw.bank)
+  freq.by.year$england[i]=boe.freq.year[which(names(boe.freq.year)==y)] %>%ifelse(test = length(.)>0, yes = ., no = 0)%>%divide_by(., all.boe.freq.year[which(names(all.boe.freq.year)==y)])
+  
+  
+  freq.by.year$europe[i]=ecb.freq.year[which(names(ecb.freq.year)==y)]%>%ifelse(test = length(.)>0, yes = ., no = 0)%>%divide_by(., all.ecb.freq.year[which(names(all.ecb.freq.year)==y)])
+  
   
 }
 
 ```
 
+##plot frequency distribution by bank
+```{r}
+library(reshape2)
+x=melt(freq.by.year, id.vars=1) %>%set_colnames(., c("year", "bank", "n.segment"))
 
-#Get Specificities
+ggplot(x, aes(x = year, y = n.segment, color = bank)) +
+  theme_bw() + geom_line(size=2)+
+  ylab("Proportion of segments")+xlab("Years")+
+  #theme(axis.text.x = element_text(angle = 90))+
+  labs(title = "Proportion of semantically relevant segments by year and bank")
+```
+
+
+##compute similarity between relevant segments
+
+Compute the averaged cosine between segments by year and by bank
+
+```{r}
+relevant.vectors=latentNormedDocSpace[relevantId,]
+
+#concept.simil.betw.bank=proxy::simil(x=relevant.vectors[myQueryData$bank=="BoE",], y = relevant.vectors[myQueryData$bank=="ECB",], by_rows=T, method=dotProduct, convert_distances = FALSE)
+
+#equivalent to row-wise dot-product, but should be faster
+concept.simil.betw.bank=tcrossprod(x=relevant.vectors[myQueryData$bank=="BoE",], y = relevant.vectors[myQueryData$bank=="ECB",])
+
+years=seq(from=1999, to=2018, by=1)
+avg.concept.sim.year=data.frame(year=integer(length(years)), avg.sim=double(length(years)), std=double(length(years)), stringsAsFactors = F)
+
+for(i in 1: length(years)){
+  year_i=years[i]
+  
+  x=myQueryData%>%subset(., bank=="BoE")%>%.$year==year_i
+  y=myQueryData%>%subset(., bank=="ECB")%>%.$year==year_i
+  
+  sub.simil.year=concept.simil.betw.bank[x, y]
+  avg.concept.sim.year$year[i]=year_i
+  avg.concept.sim.year$avg.sim[i]=mean(sub.simil.year)
+  avg.concept.sim.year$std[i]=sd(sub.simil.year)
+  
+}
+
+```
+
+##plot averaged similarity distribution
+```{r}
+#plot(avg.sim.by.year$avg.sim, type = "l")
+p=ggplot(avg.concept.sim.year, aes(x=year, y=avg.sim))+
+  geom_line()+
+  geom_errorbar(aes(ymin=avg.sim-std, ymax=avg.sim+std), colour="black", width=.1)+
+  geom_point(size=3)
+
+p+labs(title="Evolution of the toobigtoofail concept discrepancy between Central Banks\n as measured with the cosine metric", x="Year", y = "Averaged cosine", subtitle="error bar = standard deviation ")
+```
+
+
+#3. Analysis of specificities
+get lexical specificities of relevant segments from the two banks
 ```{r}
 #select bank
 bank="ECB" #"BoE"
@@ -191,14 +230,14 @@ specificites=specificites[is.na(specificites$chi2)==F,]
     
 ```
 
-#Plot
+##Plot specificities
 ```{r}
 
 p=0.05
 specificites=specificites[specificites$p<p]
 
 #set number of specificities to plot 
-nSpec=30
+nSpec=40
 #set min word count. Since we used the chi2, we should keep only words above 10
 min_count=10
 quanteda::textplot_keyness(x=specificites, n=nSpec, show_legend = T, color = c("darkblue", "darkred"), labelsize=2.5, min_count=min_count, labelcolor="black", margin = 0.2)+
@@ -206,4 +245,6 @@ quanteda::textplot_keyness(x=specificites, n=nSpec, show_legend = T, color = c("
   scale_color_manual(labels = c("ECB", "BoE"), values = c("darkblue", "darkred"))
 
 ```
+
+
 

@@ -48,6 +48,12 @@ if ("irlba" %in% installed.packages()==FALSE)
   install.packages('irlba',dependencies = TRUE)
 }
 library(irlba)
+if ("textstem" %in% installed.packages()==FALSE)
+{
+  install.packages('textstem',dependencies = TRUE)
+}
+library(textstem)
+
 
 
 ```
@@ -139,7 +145,8 @@ preprocesCorpus2=quanteda::tokens(preprocesCorpus, ngrams=1:2)
 
 #Find and filter rare words
 ```{r}
-wordDocFreq=quanteda::dfm(x=preprocesCorpus2, tolower=FALSE) %>% topfeatures(., n = quanteda::nfeat(.), decreasing = FALSE, scheme="docfreq")
+m=quanteda::nfeat(dfm(x=preprocesCorpus2, tolower=FALSE))
+wordDocFreq=quanteda::dfm(x=preprocesCorpus2, tolower=FALSE) %>% topfeatures(., n=m, decreasing = FALSE, scheme="docfreq")
 
 wordsTooRare=wordDocFreq[wordDocFreq<200]
 
@@ -147,16 +154,16 @@ wordsTooFrequent=wordDocFreq[wordDocFreq>(length(preprocesCorpus2)*.66)]
 
 wordsToFilter=c(wordsTooRare, wordsTooFrequent)
 
-preprocesCorpus2=quanteda::tokens_remove(preprocesCorpus2, case_insensitive = F, valuetype = "glob", pattern=wordsToFilter)
+preprocesCorpus3=quanteda::tokens_remove(preprocesCorpus2, case_insensitive = F, valuetype = "glob", pattern=names(wordsToFilter))
 
 ```
 
 #Filter short segments
 ```{r}
 
-lengthOfSegment=lapply(preprocesCorpus2, FUN = function(x) length(x))
+lengthOfSegment=lapply(preprocesCorpus3, FUN = function(x) length(x))
 #n=sum(lengthOfSegment>4)
-preprocesCorpus2=preprocesCorpus2[lengthOfSegment>4,]
+preprocesCorpus3=preprocesCorpus3[lengthOfSegment>4,]
 myData=myData[lengthOfSegment>4,]
 myMetaData=myMetaData[lengthOfSegment>4,]
 
@@ -164,17 +171,17 @@ myMetaData=myMetaData[lengthOfSegment>4,]
 
 #save preprocessed data
 ```{r}
-myData$tokens=preprocesCorpus2
-saveRDS(myData, "2Banks_preProText-2019-02-12.rds")
-
+myData$tokens=preprocesCorpus3
+saveRDS(myData, "2Banks_preProText-2019-02-25.rds")
+saveRDS(myMetaData, "2Banks_metadata-2019-02-25.rds")
 ```
 
 #Modeling documents
 ```{r ,cache=T}
 #Vectorize documents 
-myMatrix = quanteda::dfm(x=preprocesCorpus2, tolower=FALSE)
+myMatrix = quanteda::dfm(x=preprocesCorpus3, tolower=FALSE)
 
-saveRDS(myMatrix, "2Banks_sparseMatrix-2019-02-12.rds")
+saveRDS(myMatrix, "2Banks_sparseMatrix-2019-02-25.rds")
 
 # imprimer nombre de dimensions de la matrice
 #print(paste("nombre de mots differents apres filtrage base sur la frequence documentaire : ", length(myMatrix@Dimnames$features)))
@@ -186,13 +193,21 @@ saveRDS(myMatrix, "2Banks_sparseMatrix-2019-02-12.rds")
 #SVD 400 with irlba
 approximate the SVD, but it is faster than computing an exact SVD
 ```{r}
-#load(file = "myNyTimeTfIdfMatrixStem.RData")
+#myMatrix=readRDS("2Banks_sparseMatrix-2019-02-12.rds")
+dfm_weight(x=myMatrix, scheme="prop") %>%saveRDS(., file = "2Banks_weightedSparseMatrix-2019-02-25.rds")
 set.seed(1)
-myReducedMatrix=dfm_weight(x=myMatrix, scheme="prop") %>% irlba::irlba(., 400, tol=1e-5)
+readRDS("2Banks_weightedSparseMatrix-2019-02-25.rds") %>% irlba::irlba(., 400, tol=1e-5)%>%saveRDS(., file = "2Banks_approxReducedMatrix-2019-02-12.rds")
+
+#load(file = "myNyTimeTfIdfMatrixStem.RData")
+#set.seed(1)
+#dfm_weight(x=myMatrix, scheme="prop") %>% irlba::irlba(., 400, tol=1e-5)%>%saveRDS(., file = "2Banks_approxReducedMatrix-2019-02-12.rds")
 
 ```
 
 
+```{r}
+#saveRDS(object = myReducedMatrix, file = "2Banks_approxReducedMatrix-2019-02-12.rds")
+```
 
 
 
